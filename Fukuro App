@@ -1,1 +1,213 @@
-npx create-react-app .
+import React, { useEffect, useRef, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+/* ===============================
+   SUPABASE CONFIG
+=============================== */
+const supabase = createClient(
+  "https://dihgjozvfvjjfslbdmtl.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpaGdqb3p2ZnZqamZzbGJkbXRsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwMzczMjgsImV4cCI6MjA4NjYxMzMyOH0.AiDdBlh-CipQjlod0TL4RdimRxo6p4fL_KfiSo2G6xA"
+);
+
+/* ===============================
+   MATRIX BACKGROUND FULL SCREEN
+=============================== */
+function MatrixBackground() {
+  const canvasRef = useRef();
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const fontSize = 16;
+    const columns = Math.floor(canvas.width / fontSize);
+    const drops = Array(columns).fill(1);
+
+    function randomColor() {
+      const colors = ["#00f0ff", "#7f00ff", "#8a2be2", "#5f00ff"];
+      return colors[Math.floor(Math.random() * colors.length)];
+    }
+
+    function draw() {
+      ctx.fillStyle = "rgba(0,0,0,0.05)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.font = fontSize + "px monospace";
+
+      for (let i = 0; i < drops.length; i++) {
+        ctx.fillStyle = randomColor();
+        const text = letters.charAt(Math.floor(Math.random() * letters.length));
+        ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+        if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+        drops[i]++;
+      }
+    }
+
+    const interval = setInterval(draw, 50);
+    return () => clearInterval(interval);
+  }, []);
+
+  return <canvas ref={canvasRef} style={{ position: 'fixed', top:0, left:0, zIndex:-1, width:'100%', height:'100%' }}/>;
+}
+
+/* ===============================
+   TASK BUTTON
+=============================== */
+function TaskButton({ label, onClick, completed }) {
+  return (
+    <button style={{
+      width:'100%', textAlign:'left', position:'relative', marginBottom:'5px',
+      padding:'10px', borderRadius:'10px', border:'none', cursor:'pointer',
+      backgroundColor:'#222', color:'#00ffcc', fontWeight:'bold',
+      boxShadow:'0 0 5px #00ffcc, 0 0 15px #7f00ff'
+    }} onClick={onClick}>
+      {label} {completed && <span style={{
+        backgroundColor:'#ff00ff', color:'#fff', padding:'2px 6px', borderRadius:'6px',
+        fontSize:'12px', fontWeight:'bold', position:'absolute', right:'10px', top:'5px'
+      }}>STRIKE</span>}
+    </button>
+  );
+}
+
+/* ===============================
+   LEADERBOARD ITEM
+=============================== */
+function LeaderboardItem({ rank, user, points }) {
+  return (
+    <div style={{
+      backgroundColor:'rgba(0,0,0,0.3)', margin:'5px 0', padding:'8px', borderRadius:'6px',
+      color:'#00ffcc', textShadow:'0 0 5px #00ffcc, 0 0 10px #7f00ff'
+    }}>
+      #{rank} {user} - {points} pts
+    </div>
+  );
+}
+
+/* ===============================
+   APP PRINCIPALE
+=============================== */
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [solWallet, setSolWallet] = useState(""); // SOL Wallet opzionale
+  const [userData, setUserData] = useState(null);
+  const [leaderboard, setLeaderboard] = useState([]);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    supabase.auth.onAuthStateChange((_event, session) => setSession(session));
+    fetchLeaderboard();
+  }, []);
+
+  const generateReferral = () => Math.random().toString(36).substring(2, 8).toUpperCase();
+
+  /* LOGIN / REGISTER */
+  const signUp = async () => {
+    if (!email || !password) return alert("Inserisci email e password");
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) return alert(error.message);
+    if (data.user) {
+      await supabase.from("users").insert({
+        id: data.user.id,
+        email,
+        points: 0,
+        referral_code: generateReferral(),
+        followed_x: false,
+        telegram_joined: false,
+        sol_wallet: solWallet || null // salva wallet opzionale
+      });
+    }
+    alert("Registrazione completata! Effettua il login.");
+  };
+
+  const signIn = async () => {
+    if (!email || !password) return alert("Inserisci email e password");
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return alert(error.message);
+    setSession(data.session);
+    fetchUserData();
+  };
+
+  const fetchUserData = async () => {
+    const { data } = await supabase.from("users").select("*").eq("email", email).single();
+    setUserData(data);
+    setSolWallet(data?.sol_wallet || "");
+  };
+
+  const fetchLeaderboard = async () => {
+    const { data } = await supabase.from("users").select("*").order("points", { ascending: false }).limit(10);
+    setLeaderboard(data);
+  };
+
+  const addPoints = async (pts, field) => {
+    if (!userData) return;
+    if (userData[field]) return alert("Già completato!");
+    const newPoints = userData.points + pts;
+    await supabase.from("users").update({ points: newPoints, [field]: true }).eq("id", userData.id);
+    setUserData({ ...userData, points: newPoints, [field]: true });
+    fetchLeaderboard();
+  };
+
+  const copyContract = () => {
+    navigator.clipboard.writeText("95c9mMSMK81VNHFv6hb7naaWtbjqqLCC4PZcoScypump");
+    alert("Contract copiato!");
+  };
+
+  /* ===============================
+     LOGIN / REGISTER VIEW
+  ================================ */
+  if (!session) {
+    return (
+      <div style={{padding:'20px', maxWidth:'600px', margin:'auto', color:'#fff', fontFamily:'monospace'}}>
+        <MatrixBackground />
+        <h1 style={{color:'#00ffcc', textAlign:'center', textShadow:'0 0 20px #00ffcc, 0 0 40px #7f00ff'}}>FUKUROLABS</h1>
+        <input placeholder="Email" value={email} onChange={e => setEmail(e.target.value)}
+               style={{width:'100%', padding:'10px', margin:'5px 0', borderRadius:'6px', border:'none', backgroundColor:'#111', color:'#fff'}}/>
+        <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)}
+               style={{width:'100%', padding:'10px', margin:'5px 0', borderRadius:'6px', border:'none', backgroundColor:'#111', color:'#fff'}}/>
+        <input placeholder="SOL Wallet (opzionale)" value={solWallet} onChange={e => setSolWallet(e.target.value)}
+               style={{width:'100%', padding:'10px', margin:'5px 0', borderRadius:'6px', border:'none', backgroundColor:'#111', color:'#fff'}}/>
+        <button style={{backgroundColor:'#00ffcc', padding:'10px', margin:'5px 0', borderRadius:'10px', border:'none', cursor:'pointer', fontWeight:'bold', boxShadow:'0 0 10px #00ffcc,0 0 20px #7f00ff'}} onClick={signIn}>Login</button>
+        <button style={{backgroundColor:'#222', padding:'10px', margin:'5px 0', borderRadius:'10px', border:'none', cursor:'pointer', fontWeight:'bold', color:'#00ffcc', boxShadow:'0 0 5px #00ffcc,0 0 15px #7f00ff'}} onClick={signUp}>Register</button>
+      </div>
+    );
+  }
+
+  /* ===============================
+     DASHBOARD VIEW
+  ================================ */
+  return (
+    <div style={{padding:'20px', maxWidth:'600px', margin:'auto', color:'#fff', fontFamily:'monospace'}}>
+      <MatrixBackground />
+      <h1 style={{color:'#00ffcc', textAlign:'center', textShadow:'0 0 20px #00ffcc, 0 0 40px #7f00ff'}}>Dashboard</h1>
+
+      <h2 style={{color:'#8a2be2', fontWeight:'bold', marginTop:'20px', textAlign:'center'}}>Tasks</h2>
+      <TaskButton label="Follow X +1000" completed={userData?.followed_x} onClick={() => addPoints(1000, "followed_x")} />
+      <TaskButton label="Join Telegram +1000" completed={userData?.telegram_joined} onClick={() => addPoints(1000, "telegram_joined")} />
+      <TaskButton label="Daily Retweet +100" completed={false} onClick={() => addPoints(100, "daily_retweet")} />
+
+      <h2 style={{color:'#8a2be2', fontWeight:'bold', marginTop:'20px', textAlign:'center'}}>Contract</h2>
+      <button style={{backgroundColor:'#222', padding:'10px', margin:'5px 0', borderRadius:'10px', border:'none', cursor:'pointer', fontWeight:'bold', color:'#00ffcc', boxShadow:'0 0 5px #00ffcc,0 0 15px #7f00ff'}} onClick={copyContract}>
+        95c9mMSMK81VNHFv6hb7naaWtbjqqLCC4PZcoScypump (Copy)
+      </button>
+
+      <h2 style={{color:'#8a2be2', fontWeight:'bold', marginTop:'20px', textAlign:'center'}}>Buy</h2>
+      <button style={{backgroundColor:'#00ffcc', padding:'10px', margin:'5px 0', borderRadius:'10px', border:'none', cursor:'pointer', fontWeight:'bold', boxShadow:'0 0 10px #00ffcc,0 0 20px #7f00ff'}}
+        onClick={() => window.open("https://pump.fun/coin/95c9mMSMK81VNHFv6hb7naaWtbjqqLCC4PZcoScypump", "_blank")}>
+        Buy
+      </button>
+
+      <h2 style={{color:'#8a2be2', fontWeight:'bold', marginTop:'20px', textAlign:'center'}}>Links</h2>
+      <button style={{backgroundColor:'#222', padding:'10px', margin:'5px 0', borderRadius:'10px', border:'none', cursor:'pointer', fontWeight:'bold', color:'#00ffcc', boxShadow:'0 0 5px #00ffcc,0 0 15px #7f00ff'}} onClick={() => window.open("https://x.com/fukurolabs", "_blank")}>X / Twitter</button>
+      <button style={{backgroundColor:'#222', padding:'10px', margin:'5px 0', borderRadius:'10px', border:'none', cursor:'pointer', fontWeight:'bold', color:'#00ffcc', boxShadow:'0 0 5px #00ffcc,0 0 15px #7f00ff'}} onClick={() => window.open("https://t.me/FUKUROLABSInvestors", "_blank")}>Telegram</button>
+      <button style={{backgroundColor:'#222', padding:'10px', margin:'5px 0', borderRadius:'10px', border:'none', cursor:'pointer', fontWeight:'bold', color:'#00ffcc', boxShadow:'0 0 5px #00ffcc,0 0 15px #7f00ff'}} onClick={() => window.open("https://fukurolabs.github.io/", "_blank")}>Website</button>
+
+      <h2 style={{color:'#8a2be2', fontWeight:'bold', marginTop:'20px', textAlign:'center'}}>Leaderboard</h2>
+      {leaderboard.map((u, i) => (
+        <LeaderboardItem key={i} rank={i + 1} user={u.email} points={u.points} />
+      ))}
+    </div>
+  );
+}
