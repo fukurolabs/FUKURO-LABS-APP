@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FukuroLabs Web App</title>
+<!-- React & ReactDOM CDN -->
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+<style>
+body { margin:0; font-family: monospace; background:#000; color:#fff; }
+canvas { position:fixed; top:0; left:0; width:100%; height:100%; z-index:-1; }
+.app { padding:20px; max-width:600px; margin:auto; }
+h1 { color:#00ffcc; text-align:center; text-shadow:0 0 20px #00ffcc,0 0 40px #7f00ff; }
+h2 { color:#8a2be2; text-align:center; margin-top:20px; }
+input { width:100%; padding:10px; margin:5px 0; border-radius:6px; border:none; background:#111; color:#fff; }
+button { padding:10px; margin:5px 0; border-radius:10px; border:none; cursor:pointer; font-weight:bold; }
+.btn-primary { background:#00ffcc; color:#000; box-shadow:0 0 10px #00ffcc,0 0 20px #7f00ff; }
+.btn-alt { background:#222; color:#00ffcc; box-shadow:0 0 5px #00ffcc,0 0 15px #7f00ff; }
+.task-button { width:100%; text-align:left; position:relative; margin-bottom:5px; }
+.badge-strike { background:#ff00ff; color:#fff; padding:2px 6px; border-radius:6px; font-size:12px; position:absolute; right:10px; top:5px; }
+.leaderboard-item { background:rgba(0,0,0,0.3); margin:5px 0; padding:8px; border-radius:6px; color:#00ffcc; text-shadow:0 0 5px #00ffcc,0 0 10px #7f00ff; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+const { useState, useEffect, useRef } = React;
+
+// ================== Supabase Config ==================
+const supabase = supabaseJs.createClient(
+  "https://dihgjozvfvjjfslbdmtl.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+);
+
+// ================== Matrix Background ==================
+function MatrixBackground() {
+  const canvasRef = useRef();
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const fontSize = 16;
+    const columns = Math.floor(canvas.width / fontSize);
+    const drops = Array(columns).fill(1);
+
+    const colors = ["#00f0ff","#7f00ff","#8a2be2","#5f00ff"];
+    function randomColor() { return colors[Math.floor(Math.random()*colors.length)]; }
+
+    function draw() {
+      ctx.fillStyle = "rgba(0,0,0,0.05)";
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.font = fontSize + "px monospace";
+      for(let i=0;i<drops.length;i++){
+        ctx.fillStyle = randomColor();
+        ctx.fillText(letters.charAt(Math.floor(Math.random()*letters.length)), i*fontSize, drops[i]*fontSize);
+        drops[i] = drops[i]*fontSize > canvas.height && Math.random()>0.975 ? 0 : drops[i]+1;
+      }
+    }
+    const interval = setInterval(draw,50);
+    return ()=>clearInterval(interval);
+  },[]);
+  return <canvas ref={canvasRef}></canvas>;
+}
+
+// ================== TaskButton ==================
+function TaskButton({label, onClick, completed}){
+  return <button className="task-button btn-alt" onClick={onClick}>
+    {label} {completed && <span className="badge-strike">STRIKE</span>}
+  </button>
+}
+
+// ================== LeaderboardItem ==================
+function LeaderboardItem({rank,user,points}){
+  return <div className="leaderboard-item">#{rank} {user} - {points} pts</div>;
+}
+
+// ================== App ==================
+function App(){
+  const [session,setSession]=useState(null);
+  const [email,setEmail]=useState("");
+  const [password,setPassword]=useState("");
+  const [wallet,setWallet]=useState(""); // optional Sol wallet
+  const [logo,setLogo]=useState(null); // uploaded logo
+  const [userData,setUserData]=useState(null);
+  const [leaderboard,setLeaderboard]=useState([]);
+
+  useEffect(()=>{
+    supabase.auth.getSession().then(({data})=>setSession(data.session));
+    supabase.auth.onAuthStateChange((_event, session)=>setSession(session));
+    fetchLeaderboard();
+  },[]);
+
+  const generateReferral = ()=>Math.random().toString(36).substring(2,8).toUpperCase();
+
+  const signUp = async ()=>{
+    if(!email||!password)return alert("Insert email and password");
+    const {data,error}=await supabase.auth.signUp({email,password});
+    if(error)return alert(error.message);
+    if(data.user){
+      await supabase.from("users").insert({
+        id:data.user.id,
+        email,
+        points:0,
+        referral_code:generateReferral(),
+        followed_x:false,
+        telegram_joined:false,
+        wallet:wallet||null
+      });
+    }
+    alert("Registration complete! Please login.");
+  };
+
+  const signIn = async ()=>{
+    if(!email||!password)return alert("Insert email and password");
+    const {data,error}=await supabase.auth.signInWithPassword({email,password});
+    if(error)return alert(error.message);
+    setSession(data.session);
+    fetchUserData();
+  };
+
+  const fetchUserData=async()=>{
+    const {data}=await supabase.from("users").select("*").eq("email",email).single();
+    setUserData(data);
+  };
+
+  const fetchLeaderboard=async()=>{
+    const {data}=await supabase.from("users").select("*").order("points",{ascending:false}).limit(10);
+    setLeaderboard(data);
+  };
+
+  const addPoints=async(pts,field)=>{
+    if(!userData)return;
+    if(userData[field])return alert("Already completed!");
+    const newPoints=userData.points+pts;
+    await supabase.from("users").update({points:newPoints,[field]:true}).eq("id",userData.id);
+    setUserData({...userData,points:newPoints,[field]:true});
+    fetchLeaderboard();
+  };
+
+  const copyContract=()=>{
+    navigator.clipboard.writeText("95c9mMSMK81VNHFv6hb7naaWtbjqqLCC4PZcoScypump");
+    alert("Contract copied!");
+  };
+
+  if(!session){
+    return <div className="app">
+      <MatrixBackground/>
+
+      {/* Logo Preview */}
+      {logo && <img src={logo} alt="Logo Preview" style={{display:'block',margin:'0 auto 20px',maxWidth:'150px'}}/>}
+
+      <h1>FUKUROLABS</h1>
+
+      {/* Logo Upload */}
+      <div style={{ margin:'10px 0', textAlign:'center'}}>
+        <label style={{ color:'#00ffcc', fontWeight:'bold', display:'block', marginBottom:'5px'}}>Upload Logo</label>
+        <input type="file" accept="image/*" onChange={(e)=>{
+          const file = e.target.files[0];
+          if(file){ setLogo(URL.createObjectURL(file)); }
+        }} style={{padding:'5px',borderRadius:'6px',border:'none',background:'#111',color:'#fff'}}/>
+      </div>
+
+      <input placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)}/>
+      <input placeholder="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)}/>
+      <input placeholder="Optional Solana Wallet" value={wallet} onChange={e=>setWallet(e.target.value)}/>
+      <button className="btn-primary" onClick={signIn}>Login</button>
+      <button className="btn-alt" onClick={signUp}>Register</button>
+    </div>
+  }
+
+  return <div className="app">
+    <MatrixBackground/>
+    <h1>Dashboard</h1>
+
+    <h2>Tasks</h2>
+    <TaskButton label="Follow X +1000" completed={userData?.followed_x} onClick={()=>addPoints(1000,"followed_x")}/>
+    <TaskButton label="Join Telegram +1000" completed={userData?.telegram_joined} onClick={()=>addPoints(1000,"telegram_joined")}/>
+    <TaskButton label="Daily Retweet +100" completed={false} onClick={()=>addPoints(100,"daily_retweet")}/>
+
+    <h2>Contract</h2>
+    <button className="btn-alt" onClick={copyContract}>
+      95c9mMSMK81VNHFv6hb7naaWtbjqqLCC4PZcoScypump (Copy)
+    </button>
+
+    <h2>Buy</h2>
+    <button className="btn-primary" onClick={()=>window.open("https://pump.fun/coin/95c9mMSMK81VNHFv6hb7naaWtbjqqLCC4PZcoScypump","_blank")}>Buy Token</button>
+
+    <h2>Leaderboard</h2>
+    {leaderboard.map((u,i)=><LeaderboardItem key={i} rank={i+1} user={u.email} points={u.points}/>)}
+
+    <h2>Roadmap</h2>
+    <ul>
+      <li>Q1: Launch FukuroLabs Web App</li>
+      <li>Q2: $FUKURO airdrops & community events</li>
+      <li>Q3: Integrate NFT rewards & staking</li>
+      <li>Q4: Expansion & partnerships</li>
+    </ul>
+  </div>
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+<!-- Supabase JS CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.30.0/dist/supabase.min.js"></script>
+</body>
+</html>
